@@ -164,7 +164,8 @@ export function createDefaultAppConfig(options: DefaultAppConfigOptions = {}): A
           model: "",
           name: "Claude Code",
           opusModel: "",
-          scope: "global",
+          // Keep plain `claude` untouched until the user opts into "System default".
+          scope: "ccr",
           settingsFile: "~/.claude/settings.json",
           sonnetModel: "",
           smallFastModel: "",

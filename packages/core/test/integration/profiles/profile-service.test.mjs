@@ -1904,6 +1904,61 @@ test("profile service restores managed global Claude settings when only CCR-scop
   }
 });
 
+test("profile service strips CCR gateway env from user Claude settings with extra keys when no global Claude profile is active", () => {
+  const previousHome = process.env.HOME;
+  const home = mkdtempSync(path.join(os.tmpdir(), "ccr-profile-home-"));
+  process.env.HOME = home;
+  try {
+    const settingsFile = path.join(home, ".claude", "settings.json");
+    mkdirSync(path.dirname(settingsFile), { recursive: true });
+    writeFileSync(settingsFile, `${JSON.stringify({
+      apiKeyHelper: "/tmp/ccr-claude-code-api-key-claude-code",
+      enabledPlugins: { "example@market": true },
+      env: {
+        ANTHROPIC_API_BASE_URL: "http://127.0.0.1:3456",
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:3456",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "Fusion/GLM-5.2V",
+        ANTHROPIC_MODEL: "Fusion/GLM-5.2V",
+        CLAUDE_AGENT_API_BASE_URL: "http://127.0.0.1:3456",
+        CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "1",
+        USER_VALUE: "kept"
+      },
+      permissions: { allow: ["Bash(git status)"] },
+      theme: "dark"
+    }, null, 2)}\n`);
+
+    const statuses = restoreInactiveGlobalProfileConfigs([
+      {
+        agent: "claude-code",
+        enabled: true,
+        env: {},
+        id: "claude-code-ccr",
+        model: "Fusion/GLM-5.2V",
+        name: "Claude Code",
+        scope: "ccr",
+        smallFastModel: "",
+        surface: "auto"
+      }
+    ]);
+
+    const restored = JSON.parse(readFileSync(settingsFile, "utf8"));
+    assert.equal(statuses.length, 1);
+    assert.equal(statuses[0].ok, true);
+    assert.equal(restored.apiKeyHelper, undefined);
+    assert.deepEqual(restored.env, { USER_VALUE: "kept" });
+    assert.deepEqual(restored.permissions, { allow: ["Bash(git status)"] });
+    assert.deepEqual(restored.enabledPlugins, { "example@market": true });
+    assert.equal(restored.theme, "dark");
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    rmSync(home, { force: true, recursive: true });
+  }
+});
+
 test("profile service keeps managed global Claude settings when a global Claude profile is active", () => {
   const previousHome = process.env.HOME;
   const home = mkdtempSync(path.join(os.tmpdir(), "ccr-profile-home-"));
