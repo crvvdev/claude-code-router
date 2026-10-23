@@ -3488,10 +3488,17 @@ export function restoreInactiveGlobalProfileConfigs(profiles: ProfileConfig[]): 
         .map((profile) => profile.settingsFile || "")
         .filter(Boolean)
     ])) {
-      const restoreResult = restoreGlobalConfigFile(file, {
+      let restoreResult = restoreGlobalConfigFile(file, {
         isManagedContent: isManagedClaudeCodeSettingsContent,
         mode: privateFileMode
       });
+      if (!restoreResult.restored) {
+        // The whole-file restore only applies when the settings contain nothing
+        // but CCR-managed fields. Real user settings usually carry other keys
+        // (permissions, plugins, hooks), so strip the CCR gateway entries in
+        // place; otherwise plain `claude` keeps routing through CCR.
+        restoreResult = stripManagedClaudeCodeGatewaySettingsFile(file) ?? restoreResult;
+      }
       if (restoreResult.changed || restoreResult.missingBackup) {
         statuses.push(inactiveGlobalCleanupStatus("claude-code", file, restoreResult));
       }
@@ -3834,6 +3841,50 @@ function disabledRestoreStatus(
     ok: !restoreResult.missingBackup,
     path: resolveUserPath(file)
   };
+}
+
+function stripManagedClaudeCodeGatewaySettingsFile(file: string): RestoreFileResult | undefined {
+  let settings: Record<string, unknown>;
+  try {
+    if (!existsSync(file)) {
+      return undefined;
+    }
+    settings = readClaudeCodeSettingsObject(file);
+  } catch {
+    return undefined;
+  }
+  const env = isRecord(settings.env) ? settings.env : {};
+  const hasGatewayEnv = claudeCodeGatewayEnvKeys.every((key) => typeof env[key] === "string");
+  const hasManagedApiKeyHelper = isManagedClaudeCodeApiKeyHelper(settings.apiKeyHelper);
+  if (!hasGatewayEnv && !hasManagedApiKeyHelper) {
+    return undefined;
+  }
+
+  const nextSettings = { ...settings };
+  if (hasManagedApiKeyHelper) {
+    delete nextSettings.apiKeyHelper;
+  }
+  if (hasGatewayEnv) {
+    const managedWif = env.ANTHROPIC_FEDERATION_RULE_ID === claudeCodeWifFederationRuleId;
+    const nextEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !(
+      (claudeCodeGatewayEnvKeys as readonly string[]).includes(key) ||
+      (claudeCodeGatewayCompatibilityEnvKeys as readonly string[]).includes(key) ||
+      (managedWif && isClaudeCodeWifEnvKey(key)) ||
+      key === CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV ||
+      key === CLAUDE_CODE_MCP_CONFIG_ENV ||
+      key === CODEXL_CLAUDE_CODE_MCP_CONFIG_ENV ||
+      isClaudeCodeManagedModelEnvKey(key) ||
+      isBotGatewayEnvKey(key)
+    )));
+    if (Object.keys(nextEnv).length > 0) {
+      nextSettings.env = nextEnv;
+    } else {
+      delete nextSettings.env;
+    }
+  }
+
+  const writeResult = writeFileWithBackup(file, `${JSON.stringify(nextSettings, null, 2)}\n`, { mode: privateFileMode });
+  return { backupFile: writeResult.backupFile, changed: writeResult.changed, file, missingBackup: false, restored: true };
 }
 
 function restoreGlobalConfigFile(
